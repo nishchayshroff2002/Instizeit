@@ -1,100 +1,111 @@
-// server/server.js
 const http = require("http");
 const WebSocket = require("ws");
 const Y = require("yjs");
+const { v4: uuid } = require("uuid");
 
 const { encodeStateAsUpdate, applyUpdate } = Y;
 
 // ─────────────────────────────────────────
 // In-memory stores
 // ─────────────────────────────────────────
-const docs = new Map();      // room → Y.Doc
-const rooms = new Map();     // room → Set<ws>
+const docs = new Map();          // room → Y.Doc
+const rooms = new Map();         // room → Map<peerId, ws>
 
 // ─────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────
 function getYDoc(room) {
-  if (!docs.has(room)) {
-    docs.set(room, new Y.Doc());
-  }
+  if (!docs.has(room)) docs.set(room, new Y.Doc());
   return docs.get(room);
 }
 
 function getRoom(room) {
-  if (!rooms.has(room)) {
-    rooms.set(room, new Set());
-  }
+  if (!rooms.has(room)) rooms.set(room, new Map());
   return rooms.get(room);
 }
 
-// ─────────────────────────────────────────
-// HTTP + WebSocket Server
 // ─────────────────────────────────────────
 const server = http.createServer();
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws, req) => {
   const room = new URL(req.url, "http://localhost").pathname.slice(1);
+  const peerId = uuid();
 
   const ydoc = getYDoc(room);
-  const clients = getRoom(room);
-  clients.add(ws);
+  const peers = getRoom(room);
 
-  console.log(`✅ Client joined room: ${room}`);
+  peers.set(peerId, ws);
 
-  // ───── Send initial Yjs document state
+  console.log(`✅ ${peerId} joined room ${room}`);
+
+  // Send peerId to client
+  ws.send(JSON.stringify({
+    type: "peer-id",
+    peerId
+  }));
+
+  // Send existing peers to new user
+  ws.send(JSON.stringify({
+    type: "peers",
+    peers: [...peers.keys()].filter(id => id !== peerId)
+  }));
+
+  // Send Yjs state
   ws.send(JSON.stringify({
     type: "yjs-init",
     update: Array.from(encodeStateAsUpdate(ydoc))
   }));
 
-  // ─────────────────────────────────────
-  // Handle incoming messages
-  // ─────────────────────────────────────
-  ws.on("message", (msg) => {
+  // Notify others that a new peer joined
+  peers.forEach((client, id) => {
+    if (id !== peerId && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({
+        type: "peer-joined",
+        peerId
+      }));
+    }
+  });
+
+  ws.on("message", msg => {
     const data = JSON.parse(msg.toString());
 
-    // ───── YJS DOCUMENT UPDATE
+    // ───── YJS
     if (data.type === "yjs-update") {
-      const update = new Uint8Array(data.update);
-      applyUpdate(ydoc, update);
+      applyUpdate(ydoc, new Uint8Array(data.update));
 
-      // Broadcast to others in room
-      clients.forEach(client => {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: "yjs-update",
-            update: data.update
-          }));
+      peers.forEach((client, id) => {
+        if (id !== peerId && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify(data));
         }
       });
     }
 
     // ───── WEBRTC SIGNALING
     if (data.type === "webrtc-signal") {
-      clients.forEach(client => {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: "webrtc-signal",
-            signal: data.signal
-          }));
-        }
-      });
+      const target = peers.get(data.to);
+      if (target && target.readyState === WebSocket.OPEN) {
+        target.send(JSON.stringify({
+          type: "webrtc-signal",
+          from: peerId,
+          signal: data.signal
+        }));
+      }
     }
   });
 
-  // ─────────────────────────────────────
-  // Cleanup on disconnect
-  // ─────────────────────────────────────
   ws.on("close", () => {
-    clients.delete(ws);
-    console.log(`❌ Client left room: ${room}`);
+    peers.delete(peerId);
+    console.log(`❌ ${peerId} left room ${room}`);
 
-    if (clients.size === 0) {
+    peers.forEach(client => {
+      client.send(JSON.stringify({
+        type: "peer-left",
+        peerId
+      }));
+    });
+
+    if (peers.size === 0) {
       rooms.delete(room);
       docs.delete(room);
-      console.log(`🧹 Room ${room} destroyed`);
     }
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as Y from "yjs";
 import SaveButton from "./SaveButton";
 
-export default function Editor() {
+export default function Editor({ roomId }) {
   const textareaRef = useRef(null);
   const wsRef = useRef(null);
   const ydocRef = useRef(null);
@@ -17,8 +17,8 @@ export default function Editor() {
     const ytext = ydoc.getText("shared-text");
     ytextRef.current = ytext;
 
-    // 3️⃣ Connect to WebSocket room
-    const ws = new WebSocket("ws://localhost:1234/room1");
+    // 3️⃣ Connect to WebSocket room (dynamic)
+    const ws = new WebSocket(`ws://localhost:1234/${roomId}`);
     wsRef.current = ws;
 
     const textarea = textareaRef.current;
@@ -27,14 +27,14 @@ export default function Editor() {
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
 
-      // ───── Initial document sync
+      // Initial document sync
       if (message.type === "yjs-init") {
         const update = new Uint8Array(message.update);
         Y.applyUpdate(ydoc, update);
         textarea.value = ytext.toString();
       }
 
-      // ───── Remote CRDT updates
+      // Remote CRDT updates
       if (message.type === "yjs-update") {
         const cursor = textarea.selectionStart;
         const update = new Uint8Array(message.update);
@@ -45,12 +45,6 @@ export default function Editor() {
         textarea.selectionStart =
           textarea.selectionEnd =
           Math.min(cursor, textarea.value.length);
-      }
-
-      // ───── WebRTC signaling (future use)
-      if (message.type === "webrtc-signal") {
-        console.log("📡 WebRTC signal received:", message.signal);
-        // pc.setRemoteDescription / pc.addIceCandidate later
       }
     };
 
@@ -68,7 +62,7 @@ export default function Editor() {
       ws.close();
       ydoc.destroy();
     };
-  }, []);
+  }, [roomId]); // 👈 important
 
   // 6️⃣ Update CRDT when user types
   const handleInput = () => {

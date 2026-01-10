@@ -1,70 +1,3 @@
-import { useEffect, useRef } from "react";
-
-export default function VideoCall({ roomId = "room1", pcRef, localVideoRef }) {
-  const remoteVideoRef = useRef(null);
-
-  useEffect(() => {
-    const ws = new WebSocket(`ws://localhost:1234/${roomId}`);
-
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-    });
-    pcRef.current = pc;
-
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then(stream => {
-        localVideoRef.current.srcObject = stream;
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
-      });
-
-    pc.ontrack = e => {
-      remoteVideoRef.current.srcObject = e.streams[0];
-    };
-
-    pc.onicecandidate = e => {
-      if (e.candidate) {
-        ws.send(JSON.stringify({
-          type: "webrtc-signal",
-          signal: e.candidate
-        }));
-      }
-    };
-
-    ws.onmessage = async e => {
-      const { type, signal } = JSON.parse(e.data);
-      if (type !== "webrtc-signal") return;
-
-      if (signal.type === "offer") {
-        await pc.setRemoteDescription(signal);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "webrtc-signal", signal: answer }));
-      } else if (signal.type === "answer") {
-        await pc.setRemoteDescription(signal);
-      } else if (signal.candidate) {
-        await pc.addIceCandidate(signal);
-      }
-    };
-
-    ws.onopen = async () => {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: "webrtc-signal", signal: offer }));
-    };
-
-    return () => {
-      ws.close();
-      pc.close();
-    };
-  }, [roomId]);
-
-  return (
-    <div style={{ display: "flex", gap: 10 }}>
-      <video ref={localVideoRef} autoPlay muted playsInline width="200" />
-      <video ref={remoteVideoRef} autoPlay playsInline width="400" />
-    </div>
-  );
-}
 import { useEffect, useRef, useState } from "react";
 
 export default function VideoGrid({ roomId }) {
@@ -72,36 +5,59 @@ export default function VideoGrid({ roomId }) {
   const wsRef = useRef(null);
 
   const localStreamRef = useRef(null);
-  const peerConnections = useRef(new Map()); // peerId -> RTCPeerConnection
-  const [remoteStreams, setRemoteStreams] = useState([]);
+  const peerConnections = useRef(new Map());
+  const pendingCandidates = useRef(new Map());
 
+  const [remoteStreams, setRemoteStreams] = useState([]);
   const myId = useRef(crypto.randomUUID());
 
   useEffect(() => {
     const ws = new WebSocket(`ws://localhost:1234/${roomId}`);
     wsRef.current = ws;
 
-    // 🎥 Get camera + mic
+    // 🎥 Get camera FIRST
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
-      });
+      })
+      .catch(err => console.error("Camera error:", err));
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: "webrtc-signal",
+        join: true,
+        from: myId.current
+      }));
+    };
 
     ws.onmessage = async (event) => {
       const data = JSON.parse(event.data);
+
+      // Existing peers
+      if (data.type === "peers") {
+        data.peers.forEach(peerId => {
+          waitForStream(() => createPeer(peerId, true));
+        });
+        return;
+      }
+
       if (data.type !== "webrtc-signal") return;
 
       const { from, signal } = data;
-
       let pc = peerConnections.current.get(from);
 
       if (!pc) {
-        pc = createPeer(from);
+        await waitForStream(() => {
+          pc = createPeer(from, false);
+        });
       }
 
       if (signal.type === "offer") {
         await pc.setRemoteDescription(signal);
+
+        flushCandidates(from, pc);
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -115,25 +71,47 @@ export default function VideoGrid({ roomId }) {
 
       if (signal.type === "answer") {
         await pc.setRemoteDescription(signal);
+        flushCandidates(from, pc);
       }
 
       if (signal.candidate) {
-        await pc.addIceCandidate(signal);
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(signal);
+        } else {
+          queueCandidate(from, signal);
+        }
       }
-    };
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: "webrtc-signal",
-        join: true,
-        from: myId.current
-      }));
     };
 
     return () => ws.close();
   }, [roomId]);
 
-  function createPeer(peerId) {
+  // ─────────────────────────────
+  function waitForStream(fn) {
+    if (localStreamRef.current) return fn();
+    setTimeout(() => waitForStream(fn), 100);
+  }
+
+  function queueCandidate(peerId, candidate) {
+    if (!pendingCandidates.current.has(peerId)) {
+      pendingCandidates.current.set(peerId, []);
+    }
+    pendingCandidates.current.get(peerId).push(candidate);
+  }
+
+  function flushCandidates(peerId, pc) {
+    const list = pendingCandidates.current.get(peerId);
+    if (!list) return;
+    list.forEach(c => pc.addIceCandidate(c));
+    pendingCandidates.current.delete(peerId);
+  }
+
+  // ─────────────────────────────
+  function createPeer(peerId, createOffer) {
+    if (peerConnections.current.has(peerId)) {
+      return peerConnections.current.get(peerId);
+    }
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
     });
@@ -162,27 +140,37 @@ export default function VideoGrid({ roomId }) {
       });
     };
 
-    pc.createOffer().then(offer => {
-      pc.setLocalDescription(offer);
-      wsRef.current.send(JSON.stringify({
-        type: "webrtc-signal",
-        to: peerId,
-        from: myId.current,
-        signal: offer
-      }));
-    });
+    if (createOffer) {
+      pc.createOffer().then(offer => {
+        pc.setLocalDescription(offer);
+        wsRef.current.send(JSON.stringify({
+          type: "webrtc-signal",
+          to: peerId,
+          from: myId.current,
+          signal: offer
+        }));
+      });
+    }
 
     return pc;
   }
 
   return (
     <div style={gridStyle}>
-      <video ref={localVideoRef} autoPlay muted playsInline />
+      <video
+        ref={localVideoRef}
+        autoPlay
+        muted
+        playsInline
+        style={videoStyle}
+      />
+
       {remoteStreams.map(stream => (
         <video
           key={stream.id}
           autoPlay
           playsInline
+          style={videoStyle}
           ref={el => el && (el.srcObject = stream)}
         />
       ))}
@@ -192,8 +180,15 @@ export default function VideoGrid({ roomId }) {
 
 const gridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
   gap: "10px",
   width: "100%",
   height: "100%"
+};
+
+const videoStyle = {
+  width: "100%",
+  height: "200px",
+  background: "black",
+  borderRadius: "8px"
 };
