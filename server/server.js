@@ -16,8 +16,12 @@ const { encodeStateAsUpdate, applyUpdate } = Y;
 const app = express();
 app.use(express.json());
 
-app.get("/insert/user", (req, res) => {
+app.post("/insert/user", (req, res) => {
   const username = req.body.username;
+  const password = req.body.password;
+  if(!db.checkUser(username,password)){
+    db.insertUser(username,password);
+  }
   
 });
 

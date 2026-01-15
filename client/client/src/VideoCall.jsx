@@ -10,9 +10,9 @@ export default function VideoGrid({ roomId }) {
 
   const [remoteStreams, setRemoteStreams] = useState([]);
   const myId = useRef(crypto.randomUUID());
-
+  const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
   useEffect(() => {
-    const ws = new WebSocket(`ws://localhost:1234/${roomId}`);
+    const ws = new WebSocket(`ws://${SERVER_ADDRESS}/${roomId}`);
     wsRef.current = ws;
 
     // 🎥 Get camera FIRST
