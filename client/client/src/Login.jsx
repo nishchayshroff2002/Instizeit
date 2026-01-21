@@ -9,33 +9,28 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    try {
-      const res = await fetch(`http://${SERVER_ADDRESS}/insert/user`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ username, password }),
-      });
+    const res = await fetch(`http://${SERVER_ADDRESS}/insert/user`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, password }),
+    });
 
-      const data = await res.json();
-      console.log("Server response:", data);
-    } catch (err) {
-      console.error("Login failed:", err);
-    }
+    const data = await res.json();
+    console.log(data);
   };
 
   return (
-    <div style={container}>
+    <div>
       <h2>Login</h2>
 
-      <form onSubmit={handleSubmit} style={form}>
+      <form onSubmit={handleSubmit}>
         <input
           type="text"
           placeholder="Username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          style={input}
         />
 
         <input
@@ -43,12 +38,9 @@ export default function Login() {
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          style={input}
         />
 
-        <button type="submit" style={button}>
-          Login
-        </button>
+        <button type="submit">Login</button>
       </form>
     </div>
   );

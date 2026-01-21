@@ -1,8 +1,10 @@
 import Editor from "./Editor";
 import VideoGrid from "./VideoCall";
 import MediaControls from "./MediaControls";
+import { useParams } from "react-router-dom";
 
-export default function MeetingLayout({ roomId = "room1" }) {
+export default function MeetingLayout() {
+  const { roomId } = useParams(); // 👈 comes from URL
   return (
     <div style={page}>
       <div style={content}>

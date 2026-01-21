@@ -4,6 +4,7 @@ const WebSocket = require("ws");
 const Y = require("yjs");
 const { v4: uuid } = require("uuid");
 const db = require("./db");
+const cors = require("cors");
 require("dotenv").config();
 
 db.initDB();
@@ -15,14 +16,26 @@ const { encodeStateAsUpdate, applyUpdate } = Y;
 // ─────────────────────────────
 const app = express();
 app.use(express.json());
+app.use(cors({
+  origin: `http://${process.env.CLIENT_ADDRESS}`, 
+  credentials: true,
+}));
+app.post("/insert/user", async(req, res) => {
+  const { username, password } = req.body;
 
-app.post("/insert/user", (req, res) => {
-  const username = req.body.username;
-  const password = req.body.password;
-  if(!db.checkUser(username,password)){
-    db.insertUser(username,password);
+  try {
+    const exists = await db.checkUser(username, password);
+    console.log(exists)
+    if (!exists) {
+      db.insertUser(username, password);
+      return res.status(201).json({ message: "User created" });
+    }
+
+    return res.status(200).json({ message: "User already exists" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
   }
-  
 });
 
 // ─────────────────────────────

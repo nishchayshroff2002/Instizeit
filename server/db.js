@@ -3,7 +3,7 @@ require("dotenv").config();
 const client = new Client({
 connectionString: process.env.DATABASE_URL,
 });
-await client.connect();
+client.connect();
 console.log("✅ Connected to Postgres");
 async function initDB() {
     try {
@@ -40,8 +40,8 @@ async function checkUser(username, password) {
       select * from users where username =$1 and  password = $2
     `,[username,password]);
     console.log("✅ check user successful");
-    if(result.rowCount>0)
-        return true;
+    console.log(result.rows)
+    if(result.rows.length>0)return true;
     else return false;
   } catch (err) {
     console.error("❌ Database error:", err);
@@ -60,5 +60,7 @@ async function insertUser(username, password) {
 }
 
 module.exports = {
-  initDB
+  initDB,
+  checkUser,
+  insertUser
 };
