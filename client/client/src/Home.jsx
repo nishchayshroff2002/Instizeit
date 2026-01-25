@@ -12,10 +12,10 @@ export default function Home() {
   }
 
   return (
-    <div style={container}>
-      <h1 style={title}>Start a meeting now</h1>
+    <div >
+      <h1 >Start a meeting now</h1>
 
-      <button onClick={startMeeting} style={button}>
+      <button onClick={startMeeting} >
         Start a Meeting
       </button>
     </div>
