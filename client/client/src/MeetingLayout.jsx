@@ -52,36 +52,35 @@ export default function MeetingLayout() {
   }, [roomId, username, SERVER_ADDRESS, navigate]);
 
   const handleLeave = () => {
-    // 1. Close WebSocket (Triggers server peer-left broadcast)
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-
-    // 2. Shut down hardware tracks (Turns off camera light)
+    if (wsRef.current) wsRef.current.close();
     if (activeStream) {
       activeStream.getTracks().forEach(track => track.stop());
     }
-
-    // 3. Navigate away
-    navigate("/");
+    navigate("/home");
   };
 
   if (connection) {
     return (
       <div style={page}>
         <div style={content}>
+          {/* LEFT SECTION: 75% of screen for the Doc/Editor */}
           <div style={left}>
-            <Editor roomId={roomId} ws={wsRef} username={username} />
+            <div style={scrollContainer}>
+              <Editor roomId={roomId} ws={wsRef} username={username} />
+            </div>
           </div>
 
+          {/* RIGHT SECTION: 25% of screen for Videos */}
           <div style={right}>
-            <VideoGrid 
-              roomId={roomId} 
-              ws={wsRef} 
-              username={username} 
-              initialPeers={peers} 
-              onStreamReady={(stream) => setActiveStream(stream)}
-            />
+            <div style={videoScrollContainer}>
+              <VideoGrid 
+                roomId={roomId} 
+                ws={wsRef} 
+                username={username} 
+                initialPeers={peers} 
+                onStreamReady={(stream) => setActiveStream(stream)}
+              />
+            </div>
           </div>
         </div>
 
@@ -101,8 +100,63 @@ export default function MeetingLayout() {
   }
 }
 
-const page = { height: "100vh", display: "flex", flexDirection: "column", backgroundColor: "#1a1a1a", color: "white" };
-const content = { flex: 1, display: "flex", overflow: "hidden" };
-const left = { width: "50%", borderRight: "1px solid #333" };
-const right = { width: "50%", padding: 10, overflowY: "auto" };
-const controls = { height: 80, display: "flex", justifyContent: "center", alignItems: "center", borderTop: "1px solid #333", backgroundColor: "#111" };
+/* ───────── Layout Styles ───────── */
+
+const page = { 
+  height: "100vh", 
+  width: "100vw", 
+  display: "flex", 
+  flexDirection: "column", 
+  backgroundColor: "#1a1a1a", 
+  color: "white",
+  overflow: "hidden" 
+};
+
+const content = { 
+  flex: 1, 
+  display: "flex", 
+  width: "100%", 
+  overflow: "hidden" 
+};
+
+const left = { 
+  width: "75%", // 3/4 of the screen
+  borderRight: "1px solid #333", 
+  display: "flex", 
+  flexDirection: "column",
+  backgroundColor: "#fff", // Usually editors look better on white/light
+  color: "#000"
+};
+
+const right = { 
+  width: "25%", // Smaller video block
+  display: "flex", 
+  flexDirection: "column",
+  backgroundColor: "#121212"
+};
+
+const scrollContainer = {
+  flex: 1,
+  overflowY: "auto",
+  height: "100%"
+};
+
+// Specialized container for videos to stack them vertically if the sidebar is thin
+const videoScrollContainer = {
+  flex: 1,
+  overflowY: "auto",
+  padding: "10px",
+  display: "flex",
+  flexDirection: "column"
+};
+
+const controls = { 
+  height: "80px", 
+  width: "100%", 
+  display: "flex", 
+  justifyContent: "center", 
+  alignItems: "center", 
+  borderTop: "1px solid #333", 
+  backgroundColor: "#111",
+  zIndex: 10
+};

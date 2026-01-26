@@ -61,7 +61,7 @@ export default function Editor({ roomId, ws }) {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>CRDT Collaborative Editor</h2>
+      <h2>Collaborative Editor</h2>
       <SaveButton ytextRef={ytextRef} />
       <textarea
         ref={textareaRef}
