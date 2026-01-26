@@ -62,12 +62,11 @@ wss.on("connection", (ws, req) => {
 
     if (data.type === "new-client"){
       peerId = data.from; // 2. Assign the value here
-      if (peers.has(peerId)) {
-        const oldWs = peers.get(peerId);
-        if (oldWs !== ws) oldWs.close(); 
+      if (!peers.has(peerId)) {
+        peers.set(peerId, ws); 
       }
       console.log(`✅ ${peerId} joined room ${room}`);
-      peers.set(peerId, ws);
+      
       
       ws.send(JSON.stringify({
         type: "peers",
