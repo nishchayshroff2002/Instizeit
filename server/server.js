@@ -11,26 +11,21 @@ db.initDB();
 
 const { encodeStateAsUpdate, applyUpdate } = Y;
 
-// ─────────────────────────────
-// Express
-// ─────────────────────────────
 const app = express();
 app.use(express.json());
 app.use(cors({
   origin: `http://${process.env.CLIENT_ADDRESS}`, 
   credentials: true,
 }));
+
 app.post("/insert/user", async(req, res) => {
   const { username, password } = req.body;
-
   try {
     const exists = await db.checkUser(username, password);
-    console.log(exists)
     if (!exists) {
       db.insertUser(username, password);
       return res.status(201).json({ message: "User created" });
     }
-
     return res.status(200).json({ message: "User already exists" });
   } catch (err) {
     console.error(err);
@@ -38,11 +33,8 @@ app.post("/insert/user", async(req, res) => {
   }
 });
 
-// ─────────────────────────────
-// In-memory stores
-// ─────────────────────────────
-const docs = new Map();   // room → Y.Doc
-const rooms = new Map();  // room → Map<peerId, ws>
+const docs = new Map();   
+const rooms = new Map();  
 
 function getYDoc(room) {
   if (!docs.has(room)) docs.set(room, new Y.Doc());
@@ -54,51 +46,62 @@ function getRoom(room) {
   return rooms.get(room);
 }
 
-// ─────────────────────────────
-// HTTP + WebSocket
-// ─────────────────────────────
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws, req) => {
-  const room = req.url.slice(1); // simple & correct for now
-  const peerId = uuid();
-
+  const room = req.url.slice(1);
   const ydoc = getYDoc(room);
   const peers = getRoom(room);
-  peers.set(peerId, ws);
-
-  console.log(`✅ ${peerId} joined room ${room}`);
-
-  ws.send(JSON.stringify({
-    type: "peers",
-    peers: [...peers.keys()].filter(id => id !== peerId)
-  }));
-
-  ws.send(JSON.stringify({
-    type: "yjs-init",
-    update: Array.from(encodeStateAsUpdate(ydoc))
-  }));
+  
+  // 1. Define peerId at the connection level so all handlers can see it
+  let peerId = null; 
 
   ws.on("message", msg => {
     const data = JSON.parse(msg.toString());
 
-    if (data.type === "yjs-update") {
-      applyUpdate(ydoc, new Uint8Array(data.update));
+    if (data.type === "new-client"){
+      peerId = data.from; // 2. Assign the value here
+      if (peers.has(peerId)) {
+        const oldWs = peers.get(peerId);
+        if (oldWs !== ws) oldWs.close(); 
+      }
+      console.log(`✅ ${peerId} joined room ${room}`);
+      peers.set(peerId, ws);
+      
+      ws.send(JSON.stringify({
+        type: "peers",
+        peers: [...peers.keys()].filter(id => id !== peerId)
+      }));
 
-      peers.forEach((client, id) => {
-        if (id !== peerId && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify(data));
-        }
-      });
+      ws.send(JSON.stringify({
+        type: "yjs-init",
+        update: Array.from(encodeStateAsUpdate(ydoc))
+      }));
     }
+
+    // 3. Guard: If we haven't received 'new-client' yet, ignore other messages
+    if (!peerId) return;
+
+    if (data.type === "yjs-update") {
+  // 1. Update the server's copy of the document
+  applyUpdate(ydoc, new Uint8Array(data.update));
+
+  // 2. Broadcast to everyone EXCEPT the sender
+  peers.forEach((client, id) => {
+    // id is the string (username/uuid), client is the socket
+    if (id !== peerId && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+}
 
     if (data.type === "webrtc-signal") {
       const target = peers.get(data.to);
-      if (target?.readyState === WebSocket.OPEN) {
+      if (target.readyState === WebSocket.OPEN) {
         target.send(JSON.stringify({
           type: "webrtc-signal",
-          from: peerId,
+          from: peerId, // Now peerId is accessible
           signal: data.signal
         }));
       }
@@ -106,14 +109,20 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    peers.delete(peerId);
+    // 4. Ensure we have a peerId before trying to clean up
+    if (peerId) {
+      peers.delete(peerId);
+      console.log(`❌ ${peerId} left room ${room}`);
 
-    peers.forEach(client => {
-      client.send(JSON.stringify({
-        type: "peer-left",
-        peerId
-      }));
-    });
+      peers.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: "peer-left",
+            peerId: peerId
+          }));
+        }
+      });
+    }
 
     if (peers.size === 0) {
       rooms.delete(room);
