@@ -2,77 +2,61 @@ import { useEffect, useRef } from "react";
 import * as Y from "yjs";
 import SaveButton from "./SaveButton";
 
-export default function Editor({ roomId }) {
+export default function Editor({ roomId, ws }) {
   const textareaRef = useRef(null);
-  const wsRef = useRef(null);
   const ydocRef = useRef(null);
   const ytextRef = useRef(null);
 
   useEffect(() => {
-    // 1️⃣ Create Yjs document
+    const socket = ws.current;
+    if (!socket) return;
     const ydoc = new Y.Doc();
     ydocRef.current = ydoc;
-
-    // 2️⃣ Shared text type
     const ytext = ydoc.getText("shared-text");
     ytextRef.current = ytext;
-
-    // 3️⃣ Connect to WebSocket room (dynamic)
-    const ws = new WebSocket(`ws://localhost:1234/${roomId}`);
-    wsRef.current = ws;
-
     const textarea = textareaRef.current;
 
-    // 4️⃣ Handle incoming messages
-    ws.onmessage = (event) => {
+    const handleMessage = (event) => {
       const message = JSON.parse(event.data);
-
-      // Initial document sync
-      if (message.type === "yjs-init") {
+      if (message.type === "yjs-init" || message.type === "yjs-update") {
         const update = new Uint8Array(message.update);
-        Y.applyUpdate(ydoc, update);
-        textarea.value = ytext.toString();
-      }
+        Y.applyUpdate(ydoc, update, "remote");
 
-      // Remote CRDT updates
-      if (message.type === "yjs-update") {
         const cursor = textarea.selectionStart;
-        const update = new Uint8Array(message.update);
-
-        Y.applyUpdate(ydoc, update);
-
         textarea.value = ytext.toString();
-        textarea.selectionStart =
-          textarea.selectionEnd =
-          Math.min(cursor, textarea.value.length);
+
+        if (message.type === "yjs-update") {
+          textarea.selectionStart = textarea.selectionEnd = Math.min(cursor, textarea.value.length);
+        }
       }
     };
 
-    // 5️⃣ Send local CRDT updates
-    ydoc.on("update", (update) => {
-      ws.send(
-        JSON.stringify({
-          type: "yjs-update",
-          update: Array.from(update),
-        })
-      );
+    socket.addEventListener("message", handleMessage);
+
+    ydoc.on("update", (update, origin) => {
+      if (origin !== "remote" && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "yjs-update",
+            update: Array.from(update),
+          })
+        );
+      }
     });
 
     return () => {
-      ws.close();
+      socket.removeEventListener("message", handleMessage);
       ydoc.destroy();
     };
-  }, [roomId]); // 👈 important
+  }, [ws, roomId]);
 
-  // 6️⃣ Update CRDT when user types
   const handleInput = () => {
     const ytext = ytextRef.current;
     const textarea = textareaRef.current;
-
     ydocRef.current.transact(() => {
       ytext.delete(0, ytext.length);
       ytext.insert(0, textarea.value);
-    });
+    }, "local");
   };
 
   return (

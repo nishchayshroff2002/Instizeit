@@ -1,14 +1,15 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate,useSearchParams } from "react-router-dom";
 export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    localStorage.setItem("username", username);
+    sessionStorage.setItem("username", username);
     const res = await fetch(`http://${SERVER_ADDRESS}/insert/user`, {
       method: "POST",
       headers: {
@@ -18,8 +19,8 @@ export default function Login() {
     });
     const data = await res.json();
     console.log(data);
-    if(localStorage.getItem("redirectUrl")){
-      navigate(localStorage.getItem("redirectUrl"))
+    if(searchParams.get('redirectUrl')){
+      navigate(searchParams.get('redirectUrl'))
     }
     else{
       navigate("/home")
