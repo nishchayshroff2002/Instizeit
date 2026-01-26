@@ -13,6 +13,7 @@ export default function MeetingLayout() {
   
   const [connection, setConnection] = useState(false);
   const [peers, setPeers] = useState([]); 
+  const [activeStream, setActiveStream] = useState(null);
 
   useEffect(() => {
     if (!username) {
@@ -35,30 +36,35 @@ export default function MeetingLayout() {
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        // Centralized peer list management
         if (data.type === "peers") {
           setPeers(data.peers);
         }
-        // Sync peer removal locally for the list
         if (data.type === "peer-left") {
           setPeers(prev => prev.filter(id => id !== data.peerId));
         }
-      } catch (e) {
-        // Binary Yjs data is ignored here
-      }
-    };
-
-    socket.onerror = (error) => {
-      console.error("WebSocket Error:", error);
+      } catch (e) { }
     };
 
     return () => {
       isMounted = false;
-      if (socket.readyState !== WebSocket.CLOSED) {
-        socket.close();
-      }
+      if (socket.readyState !== WebSocket.CLOSED) socket.close();
     };
   }, [roomId, username, SERVER_ADDRESS, navigate]);
+
+  const handleLeave = () => {
+    // 1. Close WebSocket (Triggers server peer-left broadcast)
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+
+    // 2. Shut down hardware tracks (Turns off camera light)
+    if (activeStream) {
+      activeStream.getTracks().forEach(track => track.stop());
+    }
+
+    // 3. Navigate away
+    navigate("/");
+  };
 
   if (connection) {
     return (
@@ -74,31 +80,29 @@ export default function MeetingLayout() {
               ws={wsRef} 
               username={username} 
               initialPeers={peers} 
+              onStreamReady={(stream) => setActiveStream(stream)}
             />
           </div>
         </div>
 
         <div style={controls}>
-          <MediaControls />
+          <MediaControls localStream={activeStream} onLeave={handleLeave} />
         </div>
       </div>
     );
   } else {
     return (
       <div style={page}>
-        <div style={content}>
-          <div style={left}>
-            <p>Connecting to server...</p>
-          </div>
+        <div style={{...content, justifyContent: "center", alignItems: "center"}}>
+          <p>Connecting to server...</p>
         </div>
       </div>
     );
   }
 }
 
-/* ───────── styles ───────── */
-const page = { height: "100vh", display: "flex", flexDirection: "column" };
-const content = { flex: 1, display: "flex" };
-const left = { width: "50%", borderRight: "1px solid #ccc" };
-const right = { width: "50%", padding: 10 };
-const controls = { height: 70, display: "flex", justifyContent: "center", alignItems: "center", borderTop: "1px solid #ccc" };
+const page = { height: "100vh", display: "flex", flexDirection: "column", backgroundColor: "#1a1a1a", color: "white" };
+const content = { flex: 1, display: "flex", overflow: "hidden" };
+const left = { width: "50%", borderRight: "1px solid #333" };
+const right = { width: "50%", padding: 10, overflowY: "auto" };
+const controls = { height: 80, display: "flex", justifyContent: "center", alignItems: "center", borderTop: "1px solid #333", backgroundColor: "#111" };

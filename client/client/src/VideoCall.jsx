@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function VideoGrid({ roomId, ws, username, initialPeers }) {
+export default function VideoGrid({ roomId, ws, username, initialPeers, onStreamReady }) {
   const localVideoRef = useRef(null);
   const localStreamRef = useRef(null);
   const peerConnections = useRef(new Map());
@@ -8,7 +8,7 @@ export default function VideoGrid({ roomId, ws, username, initialPeers }) {
   const myId = useRef(sessionStorage.getItem("username") || username);
   const [remoteStreams, setRemoteStreams] = useState(new Map());
 
-  // 1. React to the peer list passed from the Parent
+  // 1. React to the peer list
   useEffect(() => {
     if (initialPeers && initialPeers.length > 0) {
       initialPeers.forEach((peerId) => {
@@ -23,13 +23,17 @@ export default function VideoGrid({ roomId, ws, username, initialPeers }) {
     const socket = ws.current;
     if (!socket) return;
 
-    // 2. Camera Access (Late-Binding)
+    // 2. Camera Access with Late-Binding
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        
+        // Notify Parent (MeetingLayout) that stream is ready
+        if (onStreamReady) onStreamReady(stream);
 
+        // Push tracks to any existing connections
         peerConnections.current.forEach((pc, peerId) => {
           stream.getTracks().forEach((track) => pc.addTrack(track, stream));
           renegotiate(pc, peerId);
@@ -37,7 +41,7 @@ export default function VideoGrid({ roomId, ws, username, initialPeers }) {
       })
       .catch((err) => console.error("Camera error:", err));
 
-    // 3. Handle Signaling Messages
+    // 3. Handle Signaling
     const handleVideoMessage = async (event) => {
       let data;
       try { data = JSON.parse(event.data); } catch (e) { return; }
@@ -88,8 +92,6 @@ export default function VideoGrid({ roomId, ws, username, initialPeers }) {
       peerConnections.current.forEach(pc => pc.close());
     };
   }, [ws]);
-
-  // --- Helper Functions ---
 
   function renegotiate(pc, peerId) {
     pc.createOffer().then((offer) => {
