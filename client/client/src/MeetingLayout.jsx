@@ -1,6 +1,7 @@
 import Editor from "./Editor";
 import VideoGrid from "./VideoCall";
 import MediaControls from "./MediaControls";
+import AlreadyInRoom from "./AlreadyInRoom";
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 
@@ -12,6 +13,7 @@ export default function MeetingLayout() {
   const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
 
   const [connection, setConnection] = useState(false);
+  const [isAlreadyConnected,setIsAlreadyConnected] = useState(false);
   const [peers, setPeers] = useState([]);
   const [activeStream, setActiveStream] = useState(null);
 
@@ -36,6 +38,7 @@ export default function MeetingLayout() {
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if(data.type === "already-connected") setIsAlreadyConnected(true);
         if (data.type === "peers") setPeers(data.peers);
         if (data.type === "peer-left") {
           setPeers((prev) => prev.filter((id) => id !== data.peerId));
@@ -67,6 +70,9 @@ export default function MeetingLayout() {
       </div>
     );
   }
+  if(isAlreadyConnected){
+    return <AlreadyInRoom />;
+  }
 
   return (
     <div style={page}>
@@ -86,7 +92,7 @@ export default function MeetingLayout() {
         {/* LEFT SECTION: Editor with floating effect */}
         <div style={leftSection}>
           <div style={editorWrapper}>
-            <Editor roomId={roomId} ws={wsRef} username={username} />
+            <Editor roomId={roomId} ws={wsRef}  />
           </div>
         </div>
 
