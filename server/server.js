@@ -62,9 +62,14 @@ wss.on("connection", (ws, req) => {
 
     if (data.type === "new-client"){
       peerId = data.from; // 2. Assign the value here
-      if (!peers.has(peerId)) {
-        peers.set(peerId, ws); 
+      if (peers.has(peerId)) {
+        peerId = null;
+         ws.send(JSON.stringify({
+          type: "already-connected"
+         }));
+        return;
       }
+      peers.set(peerId, ws); 
       console.log(`✅ ${peerId} joined room ${room}`);
       
       
@@ -84,15 +89,15 @@ wss.on("connection", (ws, req) => {
 
     if (data.type === "yjs-update") {
   // 1. Update the server's copy of the document
-  applyUpdate(ydoc, new Uint8Array(data.update));
+    applyUpdate(ydoc, new Uint8Array(data.update));
 
-  // 2. Broadcast to everyone EXCEPT the sender
-  peers.forEach((client, id) => {
-    // id is the string (username/uuid), client is the socket
-    if (id !== peerId && client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
+    // 2. Broadcast to everyone EXCEPT the sender
+    peers.forEach((client, id) => {
+      // id is the string (username/uuid), client is the socket
+      if (id !== peerId && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(data));
+      }
+    });
 }
 
     if (data.type === "webrtc-signal") {
