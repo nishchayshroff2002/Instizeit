@@ -1,127 +1,11 @@
-import Editor from "./Editor";
+import Workspace from "./Workspace"; 
 import VideoGrid from "./VideoCall";
 import MediaControls from "./MediaControls";
 import AlreadyInRoom from "./AlreadyInRoom";
 import { useParams, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 
-export default function MeetingLayout() {
-  const { roomId } = useParams();
-  const navigate = useNavigate();
-  const username = sessionStorage.getItem("username");
-  const wsRef = useRef(null);
-  const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
-
-  const [connection, setConnection] = useState(false);
-  const [isAlreadyConnected,setIsAlreadyConnected] = useState(false);
-  const [peers, setPeers] = useState([]);
-  const [activeStream, setActiveStream] = useState(null);
-
-  useEffect(() => {
-    if (!username) {
-      const redirectUrl = `/meet/${roomId}`;
-      navigate(`/?redirectUrl=${redirectUrl}`);
-      return;
-    }
-
-    let isMounted = true;
-    const socket = new WebSocket(`ws://${SERVER_ADDRESS}/${roomId}`);
-    wsRef.current = socket;
-
-    socket.onopen = () => {
-      if (isMounted && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "new-client", from: username }));
-        setConnection(true);
-      }
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if(data.type === "already-connected") setIsAlreadyConnected(true);
-        if (data.type === "peers") setPeers(data.peers);
-        if (data.type === "peer-left") {
-          setPeers((prev) => prev.filter((id) => id !== data.peerId));
-        }
-      } catch (e) {}
-    };
-
-    return () => {
-      isMounted = false;
-      if (socket.readyState !== WebSocket.CLOSED) socket.close();
-    };
-  }, [roomId, username, SERVER_ADDRESS, navigate]);
-
-  const handleLeave = () => {
-    if (wsRef.current) wsRef.current.close();
-    if (activeStream) {
-      activeStream.getTracks().forEach((track) => track.stop());
-    }
-    navigate("/home");
-  };
-
-  if (!connection) {
-    return (
-      <div style={page}>
-        <div style={loaderContainer}>
-          <div style={spinner}></div>
-          <p style={{ color: "#6c5ce7", fontWeight: "600" }}>Establishing Secure Connection...</p>
-        </div>
-      </div>
-    );
-  }
-  if(isAlreadyConnected){
-    return <AlreadyInRoom />;
-  }
-
-  return (
-    <div style={page}>
-      {/* Background Decor */}
-      <div style={blob1}></div>
-      <div style={blob2}></div>
-
-      {/* Top Header */}
-      <div style={header}>
-        <div style={roomBadge}>
-          <span style={dot}></span> Room: {roomId.slice(0, 8)}...
-        </div>
-        <div style={userDisplay}>Logged in as <b>{username}</b></div>
-      </div>
-
-      <div style={content}>
-        {/* LEFT SECTION: Editor with floating effect */}
-        <div style={leftSection}>
-          <div style={editorWrapper}>
-            <Editor roomId={roomId} ws={wsRef}  />
-          </div>
-        </div>
-
-        {/* RIGHT SECTION: Video Sidebar */}
-        <div style={rightSection}>
-          <div style={videoWrapper}>
-            <h3 style={sidebarTitle}>Participants</h3>
-            <div style={videoScrollContainer}>
-              <VideoGrid
-                roomId={roomId}
-                ws={wsRef}
-                username={username}
-                initialPeers={peers}
-                onStreamReady={(stream) => setActiveStream(stream)}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* FLOATING CONTROLS */}
-      <div style={controlsDock}>
-        <MediaControls localStream={activeStream} onLeave={handleLeave} />
-      </div>
-    </div>
-  );
-}
-
-/* ───────── Arctic Workspace Styles ───────── */
+/* ───────── STYLES ───────── */
 
 const page = {
   height: "100vh",
@@ -163,6 +47,7 @@ const header = {
   alignItems: "center",
   justifyContent: "space-between",
   zIndex: 10,
+  flexShrink: 0,
 };
 
 const roomBadge = {
@@ -180,22 +65,23 @@ const roomBadge = {
 };
 
 const dot = { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#00ce4c" };
-
 const userDisplay = { fontSize: "14px", color: "#636e72" };
 
 const content = {
   flex: 1,
   display: "flex",
-  padding: "10px 20px 100px 20px", // Bottom padding for floating controls
+  padding: "10px 20px 100px 20px",
   gap: "20px",
   zIndex: 1,
-  overflow: "hidden",
+  overflow: "hidden", // Important for internal scrolling
+  height: "calc(100vh - 160px)", 
 };
 
 const leftSection = {
-  flex: 3, // 75%
+  flex: 3,
   display: "flex",
   flexDirection: "column",
+  height: "100%",
 };
 
 const editorWrapper = {
@@ -205,13 +91,16 @@ const editorWrapper = {
   boxShadow: "0 10px 30px rgba(0,0,0,0.04)",
   overflow: "hidden",
   border: "1px solid rgba(255,255,255,0.8)",
+  display: "flex",
 };
 
 const rightSection = {
-  flex: 1, // 25%
+  flex: 1,
   display: "flex",
   flexDirection: "column",
-  maxWidth: "350px",
+  maxWidth: "400px",
+  minWidth: "300px",
+  height: "100%",
 };
 
 const videoWrapper = {
@@ -226,7 +115,7 @@ const videoWrapper = {
 };
 
 const sidebarTitle = {
-  fontSize: "14px",
+  fontSize: "12px",
   textTransform: "uppercase",
   letterSpacing: "1px",
   color: "#6c5ce7",
@@ -247,7 +136,7 @@ const controlsDock = {
   left: "50%",
   transform: "translateX(-50%)",
   padding: "10px 30px",
-  background: "rgba(45, 52, 54, 0.9)", // Dark glass for controls to pop
+  background: "rgba(45, 52, 54, 0.9)",
   backdropFilter: "blur(15px)",
   borderRadius: "20px",
   boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
@@ -257,27 +146,94 @@ const controlsDock = {
   alignItems: "center",
 };
 
-const loaderContainer = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  justifyContent: "center",
-  height: "100%",
-  gap: "20px",
-};
-
-const spinner = {
-  width: "40px",
-  height: "40px",
-  border: "4px solid rgba(108, 92, 231, 0.1)",
-  borderTop: "4px solid #6c5ce7",
-  borderRadius: "50%",
-  animation: "spin 1s linear infinite",
-};
-
-// Add this to your Global CSS or a <style> tag
 const styleSheet = `
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}`;
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.video-container video { width: 100%; border-radius: 12px; background: #2d3436; margin-bottom: 10px; }
+`;
+
+export default function MeetingLayout() {
+  const { roomId } = useParams();
+  const navigate = useNavigate();
+  const username = sessionStorage.getItem("username");
+  const wsRef = useRef(null);
+  const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
+
+  const [connection, setConnection] = useState(false);
+  const [isAlreadyConnected, setIsAlreadyConnected] = useState(false);
+  const [peers, setPeers] = useState([]);
+  const [activeStream, setActiveStream] = useState(null);
+
+  useEffect(() => {
+    if (!username) {
+      navigate(`/?redirectUrl=/meet/${roomId}`);
+      return;
+    }
+
+    const socket = new WebSocket(`ws://${SERVER_ADDRESS}/${roomId}`);
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: "new-client", from: username }));
+      setConnection(true);
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "already-connected") setIsAlreadyConnected(true);
+        if (data.type === "peers") setPeers(data.peers);
+        if (data.type === "peer-left") setPeers(prev => prev.filter(id => id !== data.peerId));
+      } catch (e) {}
+    };
+
+    return () => { if (socket.readyState !== WebSocket.CLOSED) socket.close(); };
+  }, [roomId, username, SERVER_ADDRESS, navigate]);
+
+  const handleLeave = () => {
+    if (wsRef.current) wsRef.current.close();
+    if (activeStream) activeStream.getTracks().forEach(track => track.stop());
+    navigate("/home");
+  };
+
+  if (!connection) return <div style={page}><div style={{margin: "auto"}}>Connecting...</div></div>;
+  if (isAlreadyConnected) return <AlreadyInRoom />;
+
+  return (
+    <div style={page}>
+      <style>{styleSheet}</style>
+      <div style={blob1}></div>
+      <div style={blob2}></div>
+      <div style={header}>
+        <div style={roomBadge}><span style={dot}></span> Room: {roomId.slice(0, 8)}...</div>
+        <div style={userDisplay}>Logged in as <b>{username}</b></div>
+      </div>
+
+      <div style={content}>
+        <div style={leftSection}>
+          <div style={editorWrapper}>
+            <Workspace roomId={roomId} ws={wsRef} />
+          </div>
+        </div>
+
+        <div style={rightSection}>
+          <div style={videoWrapper}>
+            <h3 style={sidebarTitle}>Participants</h3>
+            <div style={videoScrollContainer} className="video-container">
+              <VideoGrid
+                roomId={roomId}
+                ws={wsRef}
+                username={username}
+                initialPeers={peers}
+                onStreamReady={(stream) => setActiveStream(stream)}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={controlsDock}>
+        <MediaControls localStream={activeStream} onLeave={handleLeave} />
+      </div>
+    </div>
+  );
+}
