@@ -34,15 +34,14 @@ async function initDB() {
     console.error("❌ Database error:", err);
   } 
 }
-async function checkUser(username, password) {
+async function getPassword(username) {
   try {
     const result = await client.query(`
-      select * from users where username =$1 and  password = $2
-    `,[username,password]);
-    console.log("✅ check user successful");
+      select password from users where username =$1 
+    `,[username]);
     console.log(result.rows)
-    if(result.rows.length>0)return true;
-    else return false;
+    if(result.rows.length>0)return result.rows[0].password;
+    else return "";
   } catch (err) {
     console.error("❌ Database error:", err);
   } 
@@ -61,6 +60,6 @@ async function insertUser(username, password) {
 
 module.exports = {
   initDB,
-  checkUser,
+  getPassword,
   insertUser
 };

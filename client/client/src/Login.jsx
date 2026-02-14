@@ -4,25 +4,51 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [status, setStatus] = useState({ message: "", type: "" }); // types: 'success', 'error', 'neutral'
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const SERVER_ADDRESS = import.meta.env.VITE_SERVER_ADDRESS;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    sessionStorage.setItem("username", username);
+    setStatus({ message: "Verifying credentials...", type: "neutral" });
+
     try {
       const res = await fetch(`http://${SERVER_ADDRESS}/insert/user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
+
       const data = await res.json();
-      
-      const redirectUrl = searchParams.get('redirectUrl');
-      navigate(redirectUrl || "/home");
+
+      if (res.status === 200) {
+        // User exists and password is correct
+        setStatus({ message: "Welcome back, user.", type: "success" });
+        sessionStorage.setItem("username", username);
+        setTimeout(() => {
+          const redirectUrl = searchParams.get('redirectUrl');
+          navigate(redirectUrl || "/home");
+        }, 1200);
+      } 
+      else if (res.status === 201) {
+        // New user created
+        setStatus({ message: "New user initialized. Welcome.", type: "success" });
+        sessionStorage.setItem("username", username);
+        setTimeout(() => {
+          const redirectUrl = searchParams.get('redirectUrl');
+          navigate(redirectUrl || "/home");
+        }, 1200);
+      } 
+      else if (res.status === 400) {
+        // User exists but password was wrong
+        setStatus({ message: "Access Denied: Incorrect password.", type: "error" });
+      } else {
+        setStatus({ message: data.message || "Authentication failed.", type: "error" });
+      }
     } catch (err) {
       console.error("Login error:", err);
+      setStatus({ message: "Connection lost. Is the server running?", type: "error" });
     }
   };
 
@@ -39,10 +65,22 @@ export default function Login() {
           <div style={brandUnderline}></div>
         </div>
 
-        <div style={{ textAlign: "left", marginBottom: "30px" }}>
+        <div style={{ textAlign: "left", marginBottom: "20px" }}>
           <h2 style={{ margin: 0, color: "#2d3436", fontSize: "24px", fontWeight: "700" }}>Sign In</h2>
-          <p style={{ color: "#636e72", fontSize: "14px", marginTop: "4px" }}>Welcome back to the workspace</p>
+          <p style={{ color: "#636e72", fontSize: "14px", marginTop: "4px" }}>Access the collaborative terminal</p>
         </div>
+
+        {/* Status Prompt */}
+        {status.message && (
+          <div style={{
+            ...statusBox,
+            backgroundColor: status.type === "error" ? "#fff5f5" : (status.type === "success" ? "#f0fff4" : "#f0f2f5"),
+            color: status.type === "error" ? "#e53e3e" : (status.type === "success" ? "#2f855a" : "#6c5ce7"),
+            border: `1px solid ${status.type === "error" ? "#feb2b2" : (status.type === "success" ? "#c6f6d5" : "#dfe6e9")}`
+          }}>
+            {status.message}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} style={formStyle}>
           <div style={inputGroup}>
@@ -72,8 +110,8 @@ export default function Login() {
           <button 
             type="submit" 
             style={buttonStyle}
-            onMouseOver={(e) => e.target.style.backgroundColor = "#5b4bc4"}
-            onMouseOut={(e) => e.target.style.backgroundColor = "#6c5ce7"}
+            onMouseOver={(e) => (e.target.style.backgroundColor = "#5b4bc4")}
+            onMouseOut={(e) => (e.target.style.backgroundColor = "#6c5ce7")}
           >
             Authenticate
           </button>
@@ -83,7 +121,7 @@ export default function Login() {
   );
 }
 
-/* ───────── Arctic Glass Styles ───────── */
+/* ───────── Styles ───────── */
 
 const containerStyle = {
   display: "flex",
@@ -100,22 +138,22 @@ const containerStyle = {
 
 const brandContainer = {
   textAlign: "center",
-  marginBottom: "40px",
+  marginBottom: "30px",
 };
 
 const brandName = {
   fontSize: "32px",
   fontWeight: "900",
-  color: "#6c5ce7", // Brand primary purple
+  color: "#6c5ce7",
   margin: 0,
   letterSpacing: "-1.5px",
-  textTransform: "lowercase", // Gives it a modern tech startup feel
+  textTransform: "lowercase",
 };
 
 const brandUnderline = {
   width: "24px",
   height: "4px",
-  backgroundColor: "#00ce4c", // Secondary accent green
+  backgroundColor: "#00ce4c",
   margin: "4px auto 0",
   borderRadius: "2px",
 };
@@ -155,6 +193,16 @@ const glassCardStyle = {
   width: "90%",
   maxWidth: "400px",
   boxShadow: "0 20px 40px rgba(0,0,0,0.04)",
+};
+
+const statusBox = {
+  padding: "12px",
+  borderRadius: "12px",
+  fontSize: "13px",
+  fontWeight: "600",
+  marginBottom: "20px",
+  textAlign: "center",
+  transition: "all 0.3s ease",
 };
 
 const formStyle = { display: "flex", flexDirection: "column", gap: "20px" };
