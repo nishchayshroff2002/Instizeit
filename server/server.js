@@ -73,6 +73,7 @@ sub.on("message", (channel, message) => {
         
         if (data.type === "webrtc-signal") {
             const target = state.peers.get(data.to);
+            console.log(`Webrtc message reddis broadcasrt from ${senderId} to ${data.to}`)
             if (target && target.readyState === WebSocket.OPEN) {
                 target.send(JSON.stringify({ ...data, from: senderId }));
             }
