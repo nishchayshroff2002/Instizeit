@@ -73,7 +73,6 @@ sub.on("message", (channel, message) => {
         
         if (data.type === "webrtc-signal") {
             const target = state.peers.get(data.to);
-            console.log(`📡 Redis Signal: Forwarding [${data.signal.type}] from ${senderId} -> ${data.to}`);
             if (target && target.readyState === WebSocket.OPEN) {
                 target.send(JSON.stringify({ ...data, from: senderId }));
             }
@@ -82,6 +81,26 @@ sub.on("message", (channel, message) => {
         console.error("❌ Redis Message Error:", e);
     }
 });
+
+// --- DB SYNC HELPER ---
+async function updateToDbWithRetry(roomId, ydoc, version) {
+    console.log(`💾 Attempting DB Update: Room ${roomId} (v${version})`);
+    for (let attempt = 1; attempt <= MAX_SAVE_RETRIES; attempt++) {
+        try {
+            await db.updateRoom(ydoc, version, roomId);
+            console.log(`✅ DB Update Success: Room ${roomId}`);
+            return;
+        } catch (err) {
+            if (attempt === MAX_SAVE_RETRIES) {
+                console.error(`❌ Failed to save room ${roomId} after ${MAX_SAVE_RETRIES} attempts`);
+                return;
+            }
+            const delay = Math.random() * JITTER_RANGE_MS;
+            console.warn(`⚠️ DB Update Retry ${attempt}/${MAX_SAVE_RETRIES} for ${roomId} in ${Math.round(delay)}ms`);
+            await new Promise(res => setTimeout(res, delay));
+        }
+    }
+}
 
 // --- WEBSOCKET SERVER ---
 const server = http.createServer(app);
@@ -103,14 +122,12 @@ wss.on("connection", (ws, req) => {
                 peerId = data.from;
                 console.log(`👤 Joining: ${peerId}`);
 
-                // 1. Ensure Room exists in DB (Await to block race conditions)
                 const exists = await db.checkRoom(roomId);
                 if (!exists) {
                     console.log(`📝 Initializing Room ${roomId} in DB...`);
                     await db.insertRoom(roomId, state.doc, state.version);
                 }
 
-                // 2. Redis Locking
                 const lockKey = `lock:${roomId}:${peerId}`;
                 const lockAcquired = await pub.set(lockKey, "active", "NX", "EX", 60);
 
@@ -121,21 +138,16 @@ wss.on("connection", (ws, req) => {
                     return;
                 }
 
-                // 3. Update DB Mapping and Local State
                 await db.insertRoomUserMapping(roomId, peerId);
                 state.peers.set(peerId, ws);
                 
                 heartbeatInterval = setInterval(() => pub.expire(lockKey, 60), 20000);
 
-                // 4. Notify Redis peers
                 pub.publish("ROOM_EVENTS", JSON.stringify({
                     roomId, senderId: peerId, data: { type: "new-peer-alert", peerId }
                 }));
 
-                // 5. Fetch fresh user list from DB
                 const usernames = await db.getUsernamesInRoom(roomId);
-                console.log(`👥 Peers Found: [${usernames.join(", ")}]`);
-
                 ws.send(JSON.stringify({
                     type: "peers",
                     peers: usernames.filter(id => id !== peerId)
@@ -152,11 +164,31 @@ wss.on("connection", (ws, req) => {
 
             if (data.type === "yjs-update") {
                 Y.applyUpdate(state.doc, new Uint8Array(data.update));
+
+                // 🔄 PERIODIC DB READ
+                if (Date.now() - state.readTimestamp > DB_READ_INTERVAL_MS) {
+                    console.log(`🔍 DB Refresh: Checking for external updates for Room ${roomId}`);
+                    const dbDetails = await db.getRoomDetails(roomId);
+                    if (dbDetails && dbDetails.ydoc_blob) {
+                        Y.applyUpdate(state.doc, new Uint8Array(dbDetails.ydoc_blob));
+                        state.version = dbDetails.version;
+                    }
+                    state.readTimestamp = Date.now();
+                    data.update = Array.from(Y.encodeStateAsUpdate(state.doc));
+                }
+
                 state.peers.forEach((client, id) => {
                     if (id !== peerId && client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));
                     }
                 });
+
+                // 🔄 PERIODIC DB WRITE
+                if (Date.now() - state.updateTimestamp > DB_UPDATE_INTERVAL_MS) {
+                    updateToDbWithRetry(roomId, state.doc, state.version);
+                    state.updateTimestamp = Date.now();
+                    state.version++; 
+                }
             }
 
             if (data.type === "webrtc-signal") {
@@ -171,14 +203,37 @@ wss.on("connection", (ws, req) => {
     ws.on("close", async () => {
         if (peerId) {
             console.log(`👋 Disconnected: ${peerId}`);
+            
+            // 1. Stop Heartbeat & Remove Redis Lock
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             await pub.del(`lock:${roomId}:${peerId}`);
+            
+            // 2. Final DB Sync (Save last changes before leaving)
+            await updateToDbWithRetry(roomId, state.doc, state.version);
+
+            // 3. Remove User from mapping
             state.peers.delete(peerId);
             await db.deleteRoomUserMapping(peerId);
             
+            // 4. Broadcast departure
             pub.publish("ROOM_EVENTS", JSON.stringify({
                 roomId, senderId: peerId, data: { type: "peer-left-alert", peerId }
             }));
+
+            // 🧹 CLEANUP: If room is empty, delete from DB
+            setTimeout(async () => {
+                const currentPeers = await db.getUsernamesInRoom(roomId);
+                if (currentPeers.length === 0) {
+                    console.log(`🧹 Room ${roomId} is empty. Running Cleanup...`);
+                    await db.cleanupRoomIfEmpty(roomId);
+                    
+                    // Also clear local memory if no users are connected to this POD
+                    if (state.peers.size === 0) {
+                        roomStates.delete(roomId);
+                        console.log(`🗑️ Memory cleared for Room ${roomId}`);
+                    }
+                }
+            }, 2000); // 2 second delay to prevent cleanup during a quick page refresh
         }
     });
 });

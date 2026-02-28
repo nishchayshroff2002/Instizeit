@@ -13,8 +13,11 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "ioredis": "^5.10.0",
     "pg": "^8.16.3",
     "ws": "^8.18.3",
-    "y-websocket": "^3.0.0"
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.29"
   }
 }
