@@ -8,12 +8,20 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
   const myId = useRef(sessionStorage.getItem("username") || username);
   const [remoteStreams, setRemoteStreams] = useState(new Map());
 
-  // 1. React to the peer list
+  // 1. React to the peer list - FIXED WITH TIE-BREAKER
   useEffect(() => {
     if (initialPeers && initialPeers.length > 0) {
       initialPeers.forEach((peerId) => {
         if (peerId !== myId.current && !peerConnections.current.has(peerId)) {
-          createPeer(peerId, true); 
+          
+          /** * TIE-BREAKER LOGIC:
+           * If my name is "godo" and yours is "mahek", godo < mahek is true.
+           * Godo will be the offerer (Caller).
+           * Mahek will see mahek < godo is false and will wait to receive the offer.
+           */
+          const isOfferer = myId.current.localeCompare(peerId) < 0; 
+          
+          createPeer(peerId, isOfferer); 
         }
       });
     }
@@ -23,36 +31,42 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
     const socket = ws.current;
     if (!socket) return;
 
-    // 2. Camera Access with Late-Binding
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
         
-        // Notify Parent (MeetingLayout) that stream is ready
         if (onStreamReady) onStreamReady(stream);
 
-        // Push tracks to any existing connections
         peerConnections.current.forEach((pc, peerId) => {
-          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-          renegotiate(pc, peerId);
+          // Check if tracks are already added to avoid duplicate track errors
+          const senders = pc.getSenders().map(s => s.track);
+          stream.getTracks().forEach((track) => {
+             if (!senders.includes(track)) pc.addTrack(track, stream);
+          });
+          
+          // Only renegotiate if we are the "polite" owner or the initiator
+          // To keep it simple, we check signaling state
+          if (pc.signalingState === "stable") {
+            renegotiate(pc, peerId);
+          }
         });
       })
       .catch((err) => console.error("Camera error:", err));
 
-    // 3. Handle Signaling
     const handleVideoMessage = async (event) => {
       let data;
       try { data = JSON.parse(event.data); } catch (e) { return; }
 
-      if (data.type === "peer-left") {
-        const pc = peerConnections.current.get(data.peerId);
+      if (data.type === "peer-left" || data.type === "peer-left-alert") {
+        const idToRemove = data.peerId;
+        const pc = peerConnections.current.get(idToRemove);
         if (pc) pc.close();
-        peerConnections.current.delete(data.peerId);
+        peerConnections.current.delete(idToRemove);
         setRemoteStreams((prev) => {
           const next = new Map(prev);
-          next.delete(data.peerId);
+          next.delete(idToRemove);
           return next;
         });
         return;
@@ -62,9 +76,12 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
         const { from, signal } = data;
         let pc = peerConnections.current.get(from);
 
+        // If we get a signal from someone we don't have a PC for, create it as a Receiver (false)
         if (!pc) pc = createPeer(from, false);
 
         if (signal.type === "offer") {
+          // Safety: If we are already in the middle of an offer, only the "polite" one should rollback
+          // For now, setting remote description usually works if isOfferer logic is respected
           await pc.setRemoteDescription(new RTCSessionDescription(signal));
           flushCandidates(from, pc);
           const answer = await pc.createAnswer();
@@ -77,8 +94,8 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
         } 
         else if (signal.candidate) {
           const candidate = new RTCIceCandidate(signal);
-          if (pc.remoteDescription) {
-            await pc.addIceCandidate(candidate);
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(candidate).catch(e => console.warn("ICE error", e));
           } else {
             queueCandidate(from, candidate);
           }
@@ -89,17 +106,22 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
     socket.addEventListener("message", handleVideoMessage);
     return () => {
       socket.removeEventListener("message", handleVideoMessage);
-      peerConnections.current.forEach(pc => pc.close());
+      // Don't close PCs here if you want the video to persist during re-renders
+      // only close if component unmounts for real
     };
   }, [ws]);
 
   function renegotiate(pc, peerId) {
+    // Only start negotiation if state is stable to avoid InvalidStateError
+    if (pc.signalingState !== "stable") return;
+
     pc.createOffer().then((offer) => {
-      pc.setLocalDescription(offer);
-      if (ws.current.readyState === WebSocket.OPEN) {
-        ws.current.send(JSON.stringify({ type: "webrtc-signal", to: peerId, from: myId.current, signal: offer }));
-      }
-    });
+      return pc.setLocalDescription(offer).then(() => {
+        if (ws.current.readyState === WebSocket.OPEN) {
+          ws.current.send(JSON.stringify({ type: "webrtc-signal", to: peerId, from: myId.current, signal: offer }));
+        }
+      });
+    }).catch(e => console.error("Renegotiation failed", e));
   }
 
   function createPeer(peerId, isOfferer) {
@@ -131,7 +153,9 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
       });
     };
 
+    // If we are the designated initiator, start the offer
     if (isOfferer) renegotiate(pc, peerId);
+    
     return pc;
   }
 
@@ -143,10 +167,11 @@ export default function VideoGrid({ roomId, ws, username, initialPeers, onStream
   function flushCandidates(peerId, pc) {
     const list = pendingCandidates.current.get(peerId);
     if (!list) return;
-    list.forEach((c) => pc.addIceCandidate(c).catch(e => console.error(e)));
+    list.forEach((c) => pc.addIceCandidate(c).catch(e => console.error("Delayed ICE error", e)));
     pendingCandidates.current.delete(peerId);
   }
 
+  // --- STYLES REMAIN SAME ---
   return (
     <div style={gridStyle}>
       <div style={tileStyle}>

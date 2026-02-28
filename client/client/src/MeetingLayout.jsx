@@ -41,28 +41,27 @@ export default function MeetingLayout() {
       return;
     }
 
+    let isClosedByCleanup = false; 
     const socket = new WebSocket(`ws://${SERVER_ADDRESS}/${roomId}`);
     wsRef.current = socket;
 
     socket.onopen = () => {
-      // FIX: Check if socket is still open before sending to prevent crash
-      if (socket.readyState === WebSocket.OPEN) {
+      if (!isClosedByCleanup && socket.readyState === WebSocket.OPEN) {
+        console.log("WebSocket connected. Sending new-client...");
         socket.send(JSON.stringify({ type: "new-client", from: username }));
         setConnection(true);
       }
     };
 
     socket.onmessage = (event) => {
+      if (isClosedByCleanup) return;
       try {
         const data = JSON.parse(event.data);
         if (data.type === "already-connected") {
           setIsAlreadyConnected(true);
           socket.close();
         }
-        if (data.type === "peers") {
-          setPeers(data.peers);
-        }
-        // Unified event names from Server
+        if (data.type === "peers") setPeers(data.peers);
         if (data.type === "new-peer-alert") {
           setPeers(prev => [...new Set([...prev, data.peerId])]);
         }
@@ -70,11 +69,16 @@ export default function MeetingLayout() {
           setPeers(prev => prev.filter(id => id !== data.peerId));
         }
       } catch (e) {
-        console.error("Client WS error:", e);
+        console.error("WS Message Error:", e);
       }
     };
 
+    socket.onerror = (err) => {
+      if (!isClosedByCleanup) console.error("WS Socket Error:", err);
+    };
+
     return () => {
+      isClosedByCleanup = true;
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close();
       }
