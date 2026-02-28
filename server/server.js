@@ -9,7 +9,6 @@ require("dotenv").config();
 
 db.initDB();
 
-// --- Redis Setup ---
 const pub = new Redis(process.env.REDIS_URL);
 const sub = new Redis(process.env.REDIS_URL);
 
@@ -21,26 +20,25 @@ const JITTER_RANGE_MS = 1000;
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: `http://${process.env.CLIENT_ADDRESS}`, credentials: true }));
+
 app.post("/insert/user", async(req, res) => {
   const { username, password } = req.body;
   try {
     const existingPassword = await db.getPassword(username)
     if(existingPassword === password){
       return res.status(200).json({ message: "User already exists" });
-    }
-    else if(existingPassword === ""){
+    } else if(existingPassword === ""){
        db.insertUser(username, password);
        return res.status(201).json({ message: "User created" });
-    }
-    else{
+    } else {
       return res.status(400).json({ message: "Incorrect password" });
     }
-   
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
   }
 });
+
 const roomStates = new Map();
 
 const getOrCreateRoomState = (roomId) => {
@@ -50,7 +48,7 @@ const getOrCreateRoomState = (roomId) => {
             version: 0,
             readTimestamp: Date.now(),
             updateTimestamp: Date.now(),
-            peers: new Map() // username -> socket
+            peers: new Map() 
         });
     }
     return roomStates.get(roomId);
@@ -64,28 +62,19 @@ sub.on("message", (channel, message) => {
     if (!state) return;
 
     switch (data.type) {
-        case "presence-check":
-            // Respond if the user is on THIS pod
-            if (state.peers.has(data.username)) {
-                pub.publish("ROOM_EVENTS", JSON.stringify({
-                    roomId, senderId: "system", data: { type: "presence-ack", username: data.username }
-                }));
-            }
-            break;
-
         case "webrtc-signal":
-            if (state.peers.has(data.username)) {
+            if (state.peers.has(data.to)) {
                 const target = state.peers.get(data.to);
                 if (target.readyState === WebSocket.OPEN) {
                     target.send(JSON.stringify({ ...data, from: senderId }));
                 }
-        }
+            }
             break;
 
         case "new-peer-alert":
         case "peer-left-alert":
-            state.peers.forEach((ws, id) => {
-                if (id !== senderId && ws.readyState === WebSocket.OPEN) {
+            state.peers.forEach((ws) => {
+                if (ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify(data));
                 }
             });
@@ -119,37 +108,27 @@ wss.on("connection", async (ws, req) => {
     } catch (e) { console.error("Room init error", e); }
 
     let peerId = null;
+    let heartbeatInterval = null;
 
     ws.on("message", async (msg) => {
         const data = JSON.parse(msg.toString());
 
         if (data.type === "new-client") {
             peerId = data.from;
+            const lockKey = `lock:${roomId}:${peerId}`;
 
-            // 1. Check DB for existing mapping
-            const dbPeers = await db.getUsernamesInRoom(roomId);
-            
-            if (dbPeers.includes(peerId)) {
-                // 2. Redis Ping Test to verify if user is alive on another pod
-                let isAliveElsewhere = false;
-                const verify = (chan, m) => {
-                    const r = JSON.parse(m);
-                    if (r.data.type === "presence-ack" && r.data.username === peerId) isAliveElsewhere = true;
-                };
-                sub.on("message", verify);
-                pub.publish("ROOM_EVENTS", JSON.stringify({ roomId, data: { type: "presence-check", username: peerId } }));
+            const lockAcquired = await pub.set(lockKey, "active", "NX", "EX", 60);
 
-                await new Promise(res => setTimeout(res, 450)); // Timeout for cross-pod response
-                sub.off("message", verify);
-
-                if (isAliveElsewhere) {
-                    ws.send(JSON.stringify({ type: "already-connected" }));
-                    peerId = null;
-                    return;
-                }
+            if (!lockAcquired) {
+                ws.send(JSON.stringify({ type: "already-connected" }));
+                peerId = null;
+                return;
             }
 
-            // 3. Setup user state
+            heartbeatInterval = setInterval(() => {
+                pub.expire(lockKey, 60);
+            }, 20000);
+
             state.peers.set(peerId, ws);
             await db.insertRoomUserMapping(roomId, peerId);
             
@@ -206,6 +185,9 @@ wss.on("connection", async (ws, req) => {
 
     ws.on("close", async () => {
         if (peerId) {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            await pub.del(`lock:${roomId}:${peerId}`);
+
             state.peers.delete(peerId);
             await db.deleteRoomUserMapping(peerId);
             
@@ -213,17 +195,15 @@ wss.on("connection", async (ws, req) => {
                 roomId, senderId: peerId, data: { type: "peer-left-alert", peerId }
             }));
 
-            // Final Cleanup: If this was the last user globally, delete room from DB
             setTimeout(async () => {
                 const currentPeers = await db.getUsernamesInRoom(roomId);
                 if (currentPeers.length === 0) {
                     await db.cleanupRoomIfEmpty(roomId);
                     if (state.peers.size === 0) roomStates.delete(roomId);
-                    console.log(`🧹 Cleaned up empty room: ${roomId}`);
                 }
-            }, 2000); // 2s buffer for refreshes/reconnects
+            }, 2000);
         }
     });
 });
 
-server.listen(1234, () => console.log("🚀 Server active on port 1234 with Redis/Postgres Sync"));
+server.listen(1234, () => console.log("🚀 Server active on port 1234 with Atomic Redis Lock"));
