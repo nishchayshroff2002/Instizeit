@@ -21,7 +21,26 @@ const JITTER_RANGE_MS = 1000;
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: `http://${process.env.CLIENT_ADDRESS}`, credentials: true }));
-
+app.post("/insert/user", async(req, res) => {
+  const { username, password } = req.body;
+  try {
+    const existingPassword = await db.getPassword(username)
+    if(existingPassword === password){
+      return res.status(200).json({ message: "User already exists" });
+    }
+    else if(existingPassword === ""){
+       db.insertUser(username, password);
+       return res.status(201).json({ message: "User created" });
+    }
+    else{
+      return res.status(400).json({ message: "Incorrect password" });
+    }
+   
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 const roomStates = new Map();
 
 const getOrCreateRoomState = (roomId) => {
@@ -55,10 +74,12 @@ sub.on("message", (channel, message) => {
             break;
 
         case "webrtc-signal":
-            const target = state.peers.get(data.to);
-            if (target && target.readyState === WebSocket.OPEN) {
-                target.send(JSON.stringify({ ...data, from: senderId }));
-            }
+            if (state.peers.has(data.username)) {
+                const target = state.peers.get(data.to);
+                if (target.readyState === WebSocket.OPEN) {
+                    target.send(JSON.stringify({ ...data, from: senderId }));
+                }
+        }
             break;
 
         case "new-peer-alert":
