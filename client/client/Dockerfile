@@ -5,4 +5,4 @@ RUN npm ci
 COPY . .
 RUN npm run build
 EXPOSE 4173
-CMD ["npx", "vite", "preview", "--host", "0.0.0.0", "--port", "4173", "--allowed-hosts", "all"]
+CMD npx vite preview --host 0.0.0.0 --port ${PORT:-4173} --allowed-hosts all
