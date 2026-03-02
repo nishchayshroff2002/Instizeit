@@ -42,7 +42,9 @@ export default function MeetingLayout() {
     }
 
     let isClosedByCleanup = false; 
-    const socket = new WebSocket(`ws://${SERVER_ADDRESS}/${roomId}`);
+    const rawAddress = SERVER_ADDRESS.replace(/^https?:\/\//, "");
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${protocol}://${rawAddress}/${roomId}`);
     wsRef.current = socket;
 
     socket.onopen = () => {
