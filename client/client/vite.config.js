@@ -10,4 +10,8 @@ export default defineConfig({
       },
     }),
   ],
+  // THE FIX: This tells Vite to trust the Cloud Run URL
+  preview: {
+    allowedHosts: true,
+  },
 })
