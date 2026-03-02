@@ -19,7 +19,7 @@ const JITTER_RANGE_MS = 1000;
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: `http://${process.env.CLIENT_ADDRESS}`, credentials: true }));
+app.use(cors({ origin: `${process.env.CLIENT_ADDRESS}`, credentials: true }));
 
 // --- HTTP ENDPOINTS ---
 app.post("/insert/user", async (req, res) => {
