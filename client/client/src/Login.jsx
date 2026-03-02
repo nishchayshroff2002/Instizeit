@@ -14,7 +14,7 @@ export default function Login() {
     setStatus({ message: "Verifying credentials...", type: "neutral" });
 
     try {
-      const res = await fetch(`http://${SERVER_ADDRESS}/insert/user`, {
+      const res = await fetch(`${SERVER_ADDRESS}/insert/user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
