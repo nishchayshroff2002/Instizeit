@@ -73,7 +73,6 @@ sub.on("message", (channel, message) => {
         
         if (data.type === "webrtc-signal") {
             const target = state.peers.get(data.to);
-            console.log(`Webrtc message reddis broadcasrt from ${senderId} to ${data.to}`)
             if (target && target.readyState === WebSocket.OPEN) {
                 target.send(JSON.stringify({ ...data, from: senderId }));
             }
@@ -97,7 +96,6 @@ async function updateToDbWithRetry(roomId, ydoc, version) {
                 return;
             }
             const delay = Math.random() * JITTER_RANGE_MS;
-            console.warn(`⚠️ DB Update Retry ${attempt}/${MAX_SAVE_RETRIES} for ${roomId} in ${Math.round(delay)}ms`);
             await new Promise(res => setTimeout(res, delay));
         }
     }
@@ -109,10 +107,8 @@ const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws, req) => {
     const roomId = req.url.slice(1);
-    console.log(`\n✨ Socket Connected: ${roomId}`);
     const state = getOrCreateRoomState(roomId);
     
-    let peerId = null;
     let heartbeatInterval = null;
 
     ws.on("message", async (msg) => {
@@ -120,38 +116,40 @@ wss.on("connection", (ws, req) => {
             const data = JSON.parse(msg.toString());
 
             if (data.type === "new-client") {
-                peerId = data.from;
-                console.log(`👤 Joining: ${peerId}`);
+                // Bind identity to this specific socket instance
+                ws.peerId = data.from;
+                ws.roomId = roomId;
+
+                console.log(`👤 Joining: ${ws.peerId}`);
 
                 const exists = await db.checkRoom(roomId);
                 if (!exists) {
-                    console.log(`📝 Initializing Room ${roomId} in DB...`);
                     await db.insertRoom(roomId, state.doc, state.version);
                 }
 
-                const lockKey = `lock:${roomId}:${peerId}`;
+                const lockKey = `lock:${roomId}:${ws.peerId}`;
                 const lockAcquired = await pub.set(lockKey, "active", "NX", "EX", 60);
 
                 if (!lockAcquired) {
-                    console.log(`🚫 Conflict: ${peerId} already in room.`);
+                    console.log(`🚫 Conflict: ${ws.peerId} already in room.`);
                     ws.send(JSON.stringify({ type: "already-connected" }));
-                    peerId = null;
+                    ws.peerId = null; // Prevent close event from running cleanup
                     return;
                 }
 
-                await db.insertRoomUserMapping(roomId, peerId);
-                state.peers.set(peerId, ws);
+                await db.insertRoomUserMapping(roomId, ws.peerId);
+                state.peers.set(ws.peerId, ws);
                 
                 heartbeatInterval = setInterval(() => pub.expire(lockKey, 60), 20000);
 
                 pub.publish("ROOM_EVENTS", JSON.stringify({
-                    roomId, senderId: peerId, data: { type: "new-peer-alert", peerId }
+                    roomId, senderId: ws.peerId, data: { type: "new-peer-alert", peerId: ws.peerId }
                 }));
 
                 const usernames = await db.getUsernamesInRoom(roomId);
                 ws.send(JSON.stringify({
                     type: "peers",
-                    peers: usernames.filter(id => id !== peerId)
+                    peers: usernames.filter(id => id !== ws.peerId)
                 }));
 
                 ws.send(JSON.stringify({
@@ -161,14 +159,13 @@ wss.on("connection", (ws, req) => {
                 return;
             }
 
-            if (!peerId) return;
+            // Ensure this socket has an identity before processing other messages
+            if (!ws.peerId) return;
 
             if (data.type === "yjs-update") {
                 Y.applyUpdate(state.doc, new Uint8Array(data.update));
 
-                // 🔄 PERIODIC DB READ
                 if (Date.now() - state.readTimestamp > DB_READ_INTERVAL_MS) {
-                    console.log(`🔍 DB Refresh: Checking for external updates for Room ${roomId}`);
                     const dbDetails = await db.getRoomDetails(roomId);
                     if (dbDetails && dbDetails.ydoc_blob) {
                         Y.applyUpdate(state.doc, new Uint8Array(dbDetails.ydoc_blob));
@@ -179,12 +176,11 @@ wss.on("connection", (ws, req) => {
                 }
 
                 state.peers.forEach((client, id) => {
-                    if (id !== peerId && client.readyState === WebSocket.OPEN) {
+                    if (id !== ws.peerId && client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(data));
                     }
                 });
 
-                // 🔄 PERIODIC DB WRITE
                 if (Date.now() - state.updateTimestamp > DB_UPDATE_INTERVAL_MS) {
                     updateToDbWithRetry(roomId, state.doc, state.version);
                     state.updateTimestamp = Date.now();
@@ -193,7 +189,7 @@ wss.on("connection", (ws, req) => {
             }
 
             if (data.type === "webrtc-signal") {
-                pub.publish("ROOM_EVENTS", JSON.stringify({ roomId, senderId: peerId, data }));
+                pub.publish("ROOM_EVENTS", JSON.stringify({ roomId, senderId: ws.peerId, data }));
             }
 
         } catch (err) {
@@ -202,39 +198,36 @@ wss.on("connection", (ws, req) => {
     });
 
     ws.on("close", async () => {
-        if (peerId) {
-            console.log(`👋 Disconnected: ${peerId}`);
+        // Use the ID bound to THIS socket
+        if (ws.peerId) {
+            console.log(`👋 Disconnected: ${ws.peerId}`);
             
-            // 1. Stop Heartbeat & Remove Redis Lock
             if (heartbeatInterval) clearInterval(heartbeatInterval);
-            await pub.del(`lock:${roomId}:${peerId}`);
+            await pub.del(`lock:${ws.roomId}:${ws.peerId}`);
             
-            // 2. Final DB Sync (Save last changes before leaving)
-            await updateToDbWithRetry(roomId, state.doc, state.version);
+            await updateToDbWithRetry(ws.roomId, state.doc, state.version);
 
-            // 3. Remove User from mapping
-            state.peers.delete(peerId);
-            await db.deleteRoomUserMapping(peerId);
+            state.peers.delete(ws.peerId);
+            await db.deleteRoomUserMapping(ws.peerId);
             
-            // 4. Broadcast departure
             pub.publish("ROOM_EVENTS", JSON.stringify({
-                roomId, senderId: peerId, data: { type: "peer-left-alert", peerId }
+                roomId: ws.roomId, 
+                senderId: ws.peerId, 
+                data: { type: "peer-left-alert", peerId: ws.peerId }
             }));
 
-            // 🧹 CLEANUP: If room is empty, delete from DB
             setTimeout(async () => {
-                const currentPeers = await db.getUsernamesInRoom(roomId);
+                const currentPeers = await db.getUsernamesInRoom(ws.roomId);
                 if (currentPeers.length === 0) {
-                    console.log(`🧹 Room ${roomId} is empty. Running Cleanup...`);
-                    await db.cleanupRoomIfEmpty(roomId);
+                    console.log(`🧹 Room ${ws.roomId} is empty. Running Cleanup...`);
+                    await db.cleanupRoomIfEmpty(ws.roomId);
                     
-                    // Also clear local memory if no users are connected to this POD
                     if (state.peers.size === 0) {
-                        roomStates.delete(roomId);
-                        console.log(`🗑️ Memory cleared for Room ${roomId}`);
+                        roomStates.delete(ws.roomId);
+                        console.log(`🗑️ Memory cleared for Room ${ws.roomId}`);
                     }
                 }
-            }, 2000); // 2 second delay to prevent cleanup during a quick page refresh
+            }, 2000);
         }
     });
 });
